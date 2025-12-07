@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <title>Analizador de vibraciones distribuido</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 1rem;
+            background-color: #f5f5f5;
+        }
+        h1, h2 {
+            margin-bottom: 0.5rem;
+        }
+        .tarjeta {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .campo {
+            margin: 0.25rem 0;
+        }
+        .label {
+            font-weight: bold;
+        }
+        .valor {
+            font-family: monospace;
+        }
+        .fila {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            border: 1px solid #333;
+            background-color: #eee;
+            cursor: pointer;
+        }
+        button:active {
+            background-color: #ddd;
+        }
+        input[type="number"] {
+            width: 4rem;
+            padding: 0.2rem;
+        }
+        #estado_envio {
+            font-size: 0.9rem;
+            margin-top: 0.3rem;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Título principal -->
+    <h1>Analizador de vibraciones distribuido</h1>
+    <p>
+        Lado ESP32: recibe las mediciones del RP2040 (FFT) por UART
+        y permite ajustar la velocidad del motor a pasos 28BYJ-48.
+    </p>
+
+    <!-- Tarjeta de mediciones de vibración -->
+    <div class="tarjeta">
+        <h2>Mediciones de vibración</h2>
+
+        <div class="campo">
+            <span class="label">Frecuencia pico:</span>
+            <span id="frec_pico" class="valor">-</span> [Hz] 
+        </div>
+
+        <div class="campo">
+            <span class="label">Amplitud pico:</span>
+            <span id="amp_pico" class="valor">-</span> [g]
+        </div>
+
+        <div class="campo">
+            <span class="label">RMS banda baja (0–50 Hz):</span>
+            <span id="rms_bajo" class="valor">-</span> [g]
+        </div>
+
+        <div class="campo">
+            <span class="label">RMS banda media (50–200 Hz):</span>
+            <span id="rms_medio" class="valor">-</span> [g]
+        </div>
+
+        <div class="campo">
+            <span class="label">RMS banda alta (&gt;200 Hz):</span>
+            <span id="rms_alto" class="valor">-</span> [g]
+        </div>
+
+        <div class="campo">
+            <span class="label">Tiempo última medición:</span>
+            <span id="ts_ms" class="valor">-</span> [ms]
+        </div>
+        
+        <div class="campo">
+            <span class="label">Tiempo FFT:</span>
+            <span id="t_fft_ms" class="valor">-</span> [ms]
+        </div>
+
+    </div>
+
+    <!-- Tarjeta de control de velocidad del motor -->
+    <div class="tarjeta">
+        <h2>Control de velocidad del motor a pasos</h2>
+
+        <p>
+            El control se hace enviando al RP2040 un comando UART del tipo
+            <code>VEL,NN</code> donde <code>NN</code> va de 0 a 100 (%).
+        </p>
+
+        <div class="campo">
+            <span class="label">Velocidad actual reportada:</span>
+            <span id="vel_motor_actual" class="valor">0</span> [%]
+        </div>
+
+        <div class="campo fila">
+            <span class="label">Nueva velocidad:</span>
+            <!-- Campo numérico 0–100 -->
+            <input id="input_vel" type="number" min="0" max="100" step="1" value="0">
+            <span>%</span>
+            <button id="btn_enviar_vel">Enviar velocidad</button>
+        </div>
+
+        <div id="estado_envio"></div>
+    </div>
+
+    <script>
+    // ###########################################################
+    // Función para consultar /data en el ESP32 y actualizar la vista
+    // ###########################################################
+
+    async function actualizarDatos() {
+        try {
+            const respuesta = await fetch('/data?nocache=' + Date.now());
+
+            if (!respuesta.ok) {
+                console.log('Error HTTP en /data:', respuesta.status);
+                return;
+            }
+
+            const datos = await respuesta.json();
+
+            // Actualizar campos de vibración si llegan como números
+            if (typeof datos.frec_pico === 'number') {
+                document.getElementById('frec_pico').textContent = datos.frec_pico.toFixed(2);
+            }
+            if (typeof datos.amp_pico === 'number') {
+                document.getElementById('amp_pico').textContent = datos.amp_pico.toFixed(2);
+            }
+            if (typeof datos.rms_bajo === 'number') {
+                document.getElementById('rms_bajo').textContent = datos.rms_bajo.toFixed(2);
+            }
+            if (typeof datos.rms_medio === 'number') {
+                document.getElementById('rms_medio').textContent = datos.rms_medio.toFixed(2);
+            }
+            if (typeof datos.rms_alto === 'number') {
+                document.getElementById('rms_alto').textContent = datos.rms_alto.toFixed(2);
+            }
+            if (typeof datos.t_fft_ms === 'number') {
+            document.getElementById('t_fft_ms').textContent = datos.t_fft_ms.toFixed(3);
+            }
+            if (typeof datos.ts_ms === 'number') {
+                document.getElementById('ts_ms').textContent = datos.ts_ms;
+            }
+
+            // Actualizar la velocidad actual reportada
+            if (typeof datos.vel_motor === 'number') {
+                const vel = datos.vel_motor;
+                document.getElementById('vel_motor_actual').textContent = vel;
+
+            }
+
+        } catch (e) {
+            console.log('Error al actualizar /data:', e);
+        }
+    }
+
+    // ###########################################################
+    // Función para enviar la velocidad /vel?vel=NN
+    // ###########################################################
+
+    async function enviarVelocidad(vel) {
+        const estado = document.getElementById('estado_envio');
+        estado.textContent = 'Enviando velocidad...';
+
+        try {
+            const url = '/vel?vel=' + encodeURIComponent(vel);
+            const respuesta = await fetch(url);
+
+            if (!respuesta.ok) {
+                estado.textContent = 'Error al enviar velocidad (HTTP ' + respuesta.status + ')';
+                return;
+            }
+
+            const texto = await respuesta.text();
+            if (texto.trim().startsWith('OK')) {
+                estado.textContent = 'Velocidad enviada correctamente (' + vel + '%)';
+            } else {
+                estado.textContent = 'Respuesta inesperada del servidor: ' + texto;
+            }
+
+        } catch (e) {
+            estado.textContent = 'Error de red al enviar velocidad';
+            console.log('Error en enviarVelocidad:', e);
+        }
+    }
+
+    // ###########################################################
+    // Manejo de eventos de interfaz (input y botón)
+    // ###########################################################
+
+    const inputVel    = document.getElementById('input_vel');
+    const botonEnviar = document.getElementById('btn_enviar_vel');
+
+    // Enviar velocidad cuando se presiona el botón
+    botonEnviar.addEventListener('click', function () {
+        let vel = parseInt(inputVel.value, 10);
+        if (isNaN(vel)) vel = 0;
+        if (vel < 0) vel = 0;
+        if (vel > 100) vel = 100;
+        inputVel.value = vel;  // normalizar en pantalla
+        enviarVelocidad(vel);
+    });
+
+    // También enviar si el usuario presiona Enter dentro del input
+    inputVel.addEventListener('keyup', function (e) {
+        if (e.key === 'Enter') {
+            botonEnviar.click();
+        }
+    });
+
+    // ###########################################################
+    // Bucle de actualización periódica de datos
+    // ###########################################################
+
+    // Primera actualización al cargar la página
+    actualizarDatos();
+
+    // Actualizar cada 500 ms (0.5 segundos)
+    setInterval(actualizarDatos, 500);
+
+    </script>
+</body>
+</html>
+
+
