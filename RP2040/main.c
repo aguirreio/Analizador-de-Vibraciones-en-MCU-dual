@@ -7,7 +7,7 @@
  *     * commTask: envía características por UART al ESP32
  *     * motorTask: controla la velocidad del motor a pasos 
  *     * uartRxTask: recibe datos para cambiar la velocidad
- * - Núcleo 1: función core1_main para el calculo de la FFT + otros
+ * - Núcleo 1: función core1_main para el calculo de la FFT
  */
 
 // ===================== FreeRTOS =====================
